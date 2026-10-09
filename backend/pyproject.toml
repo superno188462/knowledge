@@ -1,0 +1,25 @@
+[project]
+name = "knowledge-data-platform-server"
+version = "0.1.0"
+description = "Knowledge directory management and Gateway vector access service"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "alembic>=1.13.0,<2.0.0",
+    "asyncpg>=0.29.0,<1.0.0",
+    "cryptography>=43,<47",
+    "fastapi>=0.116.0,<1.0.0",
+    "httpx>=0.28.0,<1.0.0",
+    "python-dotenv>=1.1.0,<2.0.0",
+    "sqlalchemy[asyncio]>=2.0.0,<3.0.0",
+    "uvicorn[standard]>=0.35.0,<1.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8,<10",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

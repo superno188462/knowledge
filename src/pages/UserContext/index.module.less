@@ -1,0 +1,183 @@
+.page {
+  min-height: 100vh;
+  background: #f7f8fb;
+}
+
+.content {
+  width: min(100%, 1200px);
+  margin: 0 auto;
+  padding: 30px 32px 48px;
+  box-sizing: border-box;
+}
+
+.heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+
+.card {
+  margin-bottom: 18px;
+  border: 1px solid #eaedf3;
+  border-radius: 14px;
+}
+
+.error {
+  margin-bottom: 16px;
+}
+
+.loading {
+  min-height: 160px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  color: #69758d;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.createForm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  margin-bottom: 20px;
+  border-radius: 10px;
+  background: #f8f9fc;
+}
+
+.sessionSearch,
+.sessionHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sessionSearch > :first-child {
+  flex: 1;
+  min-width: 220px;
+}
+
+.sessionSearch :global(.arco-select) {
+  width: 280px;
+  flex: 0 0 280px;
+}
+
+.sessionHeading {
+  margin-top: 18px;
+}
+
+.sessionMessages {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 480px;
+  margin-top: 14px;
+  overflow: auto;
+}
+
+.sessionMessage {
+  padding: 12px;
+  border-radius: 8px;
+  background: #f8f9fc;
+
+  > div {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  p {
+    margin: 9px 0 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    line-height: 1.6;
+  }
+}
+
+.memoryList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.memory {
+  padding: 15px 16px;
+  border: 1px solid #edf0f5;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.memoryHeading,
+.memoryActions,
+.tags,
+.paging {
+  display: flex;
+  align-items: center;
+}
+
+.memoryHeading {
+  justify-content: space-between;
+}
+
+.memoryContent {
+  margin: 8px 0;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tags {
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.memory details pre {
+  max-height: 220px;
+  padding: 10px;
+  overflow: auto;
+  background: #f6f7fa;
+  border-radius: 6px;
+}
+
+.memoryId {
+  display: block;
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+
+.paging {
+  justify-content: center;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+@media (max-width: 600px) {
+  .content {
+    padding: 18px 12px 32px;
+  }
+
+  .heading {
+    align-items: flex-start;
+  }
+
+  .sessionSearch,
+  .sessionHeading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .sessionSearch :global(.arco-select) {
+    width: 100%;
+    flex-basis: auto;
+  }
+}

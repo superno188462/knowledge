@@ -1,0 +1,55 @@
+.page {
+  min-height: 100vh;
+  background: #f7f8fb;
+}
+
+.content {
+  width: min(100%, 1100px);
+  margin: 0 auto;
+  padding: 32px;
+  box-sizing: border-box;
+}
+
+.heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+
+.card {
+  border: 1px solid #eaedf3;
+  border-radius: 14px;
+}
+
+.loading {
+  min-height: 80px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+}
+
+.alert {
+  margin-bottom: 16px;
+}
+
+.capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+@media (max-width: 600px) {
+  .content {
+    padding: 20px 14px;
+  }
+}
