@@ -1,0 +1,11 @@
+# 如使用现有 PostgreSQL，加 -f deploy/compose.external-db.yaml。
+services:
+  db:
+    profiles: ["bundled-db"]
+  migrate:
+    depends_on: !reset {}
+    environment:
+      DATABASE_URL: ${EXTERNAL_DATABASE_URL:?请配置现有 PostgreSQL 的 asyncpg URL}
+  api:
+    environment:
+      DATABASE_URL: ${EXTERNAL_DATABASE_URL:?请配置现有 PostgreSQL 的 asyncpg URL}

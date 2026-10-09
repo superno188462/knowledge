@@ -7,8 +7,8 @@ import unittest
 
 import httpx
 
-from services.rag.gateway_vector_store import GatewayVectorStore, GatewayVectorStoreError
-from services.rag.knowledge_base import KnowledgeBaseService
+from app.integrations.gateway import GatewayVectorStore, GatewayVectorStoreError
+from app.modules.knowledge.service import KnowledgeBaseService
 
 
 class MemoryRepository:
@@ -96,6 +96,7 @@ class GatewayVectorStoreTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_environment_requires_only_url_key_and_collection(self) -> None:
+        from services.rag.gateway_vector_store import GatewayVectorStore
         import os
 
         names = {
@@ -107,9 +108,9 @@ class GatewayVectorStoreTests(unittest.IsolatedAsyncioTestCase):
         try:
             for key in names:
                 os.environ.pop(key, None)
-            store = GatewayVectorStore(transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=[])))
             for key, value in names.items():
                 os.environ[key] = value
+            store = GatewayVectorStore(transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=[])))
             self.assertEqual(await store.list_collections(), [])
         finally:
             for key, value in previous.items():

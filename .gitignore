@@ -37,6 +37,7 @@
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+*.egg-info/
 
 npm-debug.log*
 yarn-debug.log*

@@ -1,0 +1,24 @@
+# syntax=docker/dockerfile:1
+FROM ghcr.io/astral-sh/uv:0.9.0 AS uv
+FROM python:3.11-slim AS builder
+COPY --from=uv /uv /uvx /usr/local/bin/
+ENV UV_LINK_MODE=copy UV_COMPILE_BYTECODE=1 UV_PYTHON_DOWNLOADS=never
+WORKDIR /workspace/knowledge/backend
+# gateway_sdk 是 Compose 中定义的额外构建上下文，只复制 SDK 必需文件。
+COPY --from=gateway_sdk /pyproject.toml /README.md /workspace/gateway_api/
+COPY --from=gateway_sdk /src /workspace/gateway_api/src
+COPY backend/pyproject.toml backend/uv.lock backend/README.md ./
+RUN uv sync --frozen --no-dev --no-editable
+
+FROM python:3.11-slim AS runtime
+COPY --from=uv /uv /uvx /usr/local/bin/
+ENV PATH="/workspace/knowledge/backend/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 UV_PYTHON_DOWNLOADS=never \
+    HOST=0.0.0.0 PORT=8000
+WORKDIR /workspace/knowledge/backend
+COPY --from=builder /workspace/knowledge/backend/.venv ./.venv
+COPY backend/ ./
+RUN useradd --uid 10001 --create-home knowledge
+USER knowledge
+EXPOSE 8000
+CMD ["uv", "run", "--no-sync", "python", "main.py", "8000"]

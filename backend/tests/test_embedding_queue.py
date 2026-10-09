@@ -7,8 +7,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from services.rag.embedding_queue import EmbeddingQueue
-from services.rag.gateway_vector_store import GatewayVectorStoreError
+from app.modules.embedding_jobs.worker import EmbeddingQueue
+from app.integrations.gateway import GatewayVectorStoreError
 
 
 class MemoryQueue(EmbeddingQueue):
@@ -44,11 +44,11 @@ class EmbeddingQueueTests(unittest.IsolatedAsyncioTestCase):
             async def begin(self):
                 yield Session()
         with (
-            patch("services.rag.embedding_queue.get_session_factory", return_value=Factory()),
-            patch("services.rag.embedding_queue.add_activity") as activity,
+            patch("app.modules.embedding_jobs.worker.get_session_factory", return_value=Factory()),
+            patch("app.modules.embedding_jobs.worker.add_activity") as activity,
         ):
             claimed = await EmbeddingQueue()._claim()
-        self.assertEqual(claimed, ("job", "doc", "owner", 2))
+        self.assertEqual(claimed, ("job", "doc", "owner", 2, None))
         self.assertIn("FOR UPDATE SKIP LOCKED", queries[0])
         self.assertIn("heartbeat_at", queries[0])
         self.assertIsNotNone(job.heartbeat_at)
@@ -65,8 +65,8 @@ class EmbeddingQueueTests(unittest.IsolatedAsyncioTestCase):
             async def begin(self):
                 yield Session()
         with (
-            patch("services.rag.embedding_queue.get_session_factory", return_value=Factory()),
-            patch("services.rag.embedding_queue.add_activity") as activity,
+            patch("app.modules.embedding_jobs.worker.get_session_factory", return_value=Factory()),
+            patch("app.modules.embedding_jobs.worker.add_activity") as activity,
         ):
             await EmbeddingQueue()._finish("job", "doc", 1, "OLD_ERROR")
         self.assertEqual(job.status, "running")
@@ -91,12 +91,12 @@ class EmbeddingQueueTests(unittest.IsolatedAsyncioTestCase):
                 active -= 1
 
         with (
-            patch("services.rag.embedding_queue.gateway_credential_service.get_key", new=AsyncMock(return_value="test-key")),
-            patch("services.rag.embedding_queue.get_knowledge_base_service", return_value=FakeService()),
+            patch("app.modules.embedding_jobs.worker.gateway_credential_service.get_key", new=AsyncMock(return_value="test-key")),
+            patch("app.modules.embedding_jobs.worker.get_knowledge_base_service", return_value=FakeService()),
         ):
             await asyncio.gather(
-                queue._process(("job-1", "doc-1", "owner-1", 1)),
-                queue._process(("job-2", "doc-2", "owner-1", 1)),
+                queue._process(("job-1", "doc-1", "owner-1", 1, "docs")),
+                queue._process(("job-2", "doc-2", "owner-1", 1, "docs")),
             )
 
         self.assertEqual(peak, 2)
@@ -113,10 +113,10 @@ class EmbeddingQueueTests(unittest.IsolatedAsyncioTestCase):
                 raise GatewayVectorStoreError("VECTOR_GATEWAY_TIMEOUT")
 
         with (
-            patch("services.rag.embedding_queue.gateway_credential_service.get_key", new=AsyncMock(return_value="test-key")),
-            patch("services.rag.embedding_queue.get_knowledge_base_service", return_value=FakeService()),
+            patch("app.modules.embedding_jobs.worker.gateway_credential_service.get_key", new=AsyncMock(return_value="test-key")),
+            patch("app.modules.embedding_jobs.worker.get_knowledge_base_service", return_value=FakeService()),
         ):
-            await queue._process(("job-3", "doc-3", "owner-1", 1))
+            await queue._process(("job-3", "doc-3", "owner-1", 1, "docs"))
 
         self.assertEqual(queue.finished, [("job-3", "doc-3", "VECTOR_GATEWAY_TIMEOUT")])
         self.assertEqual(queue.progress, [("job-3", "embedding", 1, 3)])

@@ -1,22 +1,21 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from logging.config import fileConfig
-from pathlib import Path
 
 from alembic import context
-from dotenv import load_dotenv
+from app.settings import get_settings
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from services.auth.database import Base
-from services.rag import models as rag_models  # noqa: F401 - register knowledge tables
-from services.gateway_credentials import models as gateway_credential_models  # noqa: F401
+from app.infrastructure.database import Base
+from app.modules.knowledge import models as knowledge_models  # noqa: F401
+from app.modules.embedding_jobs import models as job_models  # noqa: F401
+from app.modules.activity_logs import models as log_models  # noqa: F401
+from app.modules.credentials import models as gateway_credential_models  # noqa: F401
 
 config = context.config
-load_dotenv(Path(__file__).resolve().parents[1] / ".env")
-database_url = os.getenv("DATABASE_URL", "").strip()
+database_url = get_settings().database_url
 if not database_url:
     raise RuntimeError("DATABASE_URL_REQUIRED")
 config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))

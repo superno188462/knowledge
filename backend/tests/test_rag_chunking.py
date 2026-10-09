@@ -1,6 +1,6 @@
 """项目侧 RAG 切片边界和长度契约测试。"""
 
-from services.rag.chunking import split_text
+from app.modules.knowledge.chunking import split_text
 
 
 def test_split_text_respects_limit_and_overlap() -> None:

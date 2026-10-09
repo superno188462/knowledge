@@ -6,11 +6,12 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from services.rag.gateway_vector_store import GatewayVectorStore, GatewayVectorStoreError
+from app.integrations.gateway import GatewayVectorStore, GatewayVectorStoreError
 
 
 class VectorBatchTests(unittest.IsolatedAsyncioTestCase):
     async def test_first_search_and_delete_resolve_collection_from_environment(self):
+        from services.rag.gateway_vector_store import GatewayVectorStore
         requests = []
         def handler(request):
             requests.append(request)
@@ -78,7 +79,7 @@ class VectorBatchTests(unittest.IsolatedAsyncioTestCase):
         def handler(request):
             calls.append(json.loads(request.content))
             raise httpx.ReadTimeout("private", request=request)
-        with patch("services.rag.gateway_vector_store.asyncio.sleep", new=AsyncMock()):
+        with patch("app.integrations.gateway.vector_store.asyncio.sleep", new=AsyncMock()):
             with self.assertRaises(GatewayVectorStoreError) as caught:
                 await self.store(handler).add_vectors([{"id": "stable", "content": "x"}])
         self.assertEqual(len(calls), 3)

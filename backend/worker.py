@@ -4,16 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
-
-from dotenv import load_dotenv
-
-from services.rag.embedding_queue import embedding_queue
+from app.modules.embedding_jobs.worker import embedding_queue
 
 
 def run_worker() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    load_dotenv(Path(__file__).resolve().parent / ".env")
     asyncio.run(embedding_queue.serve())
 
 

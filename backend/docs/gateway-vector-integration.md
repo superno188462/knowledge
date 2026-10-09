@@ -16,9 +16,9 @@ GATEWAY_EMBEDDING_MODEL=openai/text-embedding-3-small
 ## 调用
 
 ```python
-from services.rag.gateway_vector_store import GatewayVectorStore
+from app.dependencies import build_vector_store
 
-store = GatewayVectorStore()
+store = build_vector_store()
 await store.create_collection(chunk_size=1000)
 await store.add_vectors([
     {"id": "faq-001-part-0001", "content": "已经切好的文本",
@@ -48,3 +48,9 @@ uv run pytest -q
 ```
 
 测试用 httpx MockTransport 和内存业务仓库，不触碰生产 collection。查询 metadata 按 JSONB 包含匹配，支持范围/布尔过滤表达式与否以 Gateway 当前契约为准；当前客户端仅传 metadata 对象。
+
+可移植 SDK 使用显式构造参数和 `GatewayClient`；Knowledge 的环境变量装配位于 `app/dependencies.py`。目录迁移后请查看 [GatewayClient 使用说明](../app/integrations/gateway/README.md)。
+
+## 独立 Gateway SDK（当前接入方式）
+
+SDK 已迁至相邻仓库 `gateway_api/src/gateway_client/`，Knowledge 使用 `agent-gateway-client` 的 editable 依赖。原 `app/integrations/gateway/` 仅兼容旧导入，原目录复制和独立打包方式已被替代。完整开发与部署说明见 `backend/docs/gateway-sdk-workflow.md`（后端文档中相对路径为 `docs/gateway-sdk-workflow.md`）。

@@ -8,8 +8,19 @@ export interface GatewayKeyStatus {
   updated_at?: string;
   vector_access?: boolean;
   collection_exists?: boolean;
+  knowledge_ready?: boolean;
+  selected_collection?: string | null;
+  collections?: GatewayCollection[];
   error_code?: string;
   message?: string;
+}
+
+export interface GatewayCollection {
+  id?: string;
+  collection: string;
+  model?: string;
+  chunk_size?: number;
+  description?: string;
 }
 
 export interface UserProfile {
@@ -80,6 +91,13 @@ export const gatewayApi = {
       body: JSON.stringify({ api_key: apiKey }),
     }),
   deleteKey: () => request<void>('/api/settings/gateway-key', { method: 'DELETE' }),
+  selectCollection: (collection: string) => request<GatewayKeyStatus>('/api/settings/gateway-collection', {
+    method: 'PUT', body: JSON.stringify({ collection }),
+  }),
+  createCollection: (collection: string, embeddingModel: string, chunkSize: number) =>
+    request<GatewayKeyStatus>('/api/settings/gateway-collections', {
+      method: 'POST', body: JSON.stringify({ collection, embedding_model: embeddingModel, chunk_size: chunkSize }),
+    }),
   getSessionMessages: (sessionId: string, limit = 50) =>
     request<UserSessionMessages>(
       `/api/user-context/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}`

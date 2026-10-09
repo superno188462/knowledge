@@ -80,7 +80,7 @@ knowledge 管理端新增切片时强制写入：
 
 Knowledge 的队列后台按文件并行处理，Gateway 客户端按每批最多 64 条切片发送 upsert，单次请求超时为 120 秒。后端核对 Gateway 返回的 `upserted[].external_id`；全部确认后才清理旧向量、切换活动版本。若请求超时，Gateway 可能已经写入该条记录，Knowledge 将其标记为“写入结果未确认”，保留旧活动版本与本地切片映射以供后续处理。重新嵌入使用当前登录用户保存在 Knowledge 后端的 Gateway 项目 Key。
 
-嵌入队列保存在 Knowledge 的 PostgreSQL `knowledge_embedding_jobs` 表。升级后端前执行 `cd backend`、`uv run alembic upgrade head`；随后以 `uv run python main.py` 启动，命令会同时启动独立 worker 进程来领取任务，HTTP API 不再执行切片或 Gateway 向量写入。可选环境变量 `KNOWLEDGE_EMBEDDING_WORKERS=3` 控制同时处理的文件数（允许 1–16）。多个 worker 使用 `FOR UPDATE SKIP LOCKED` 领取不同文件任务，不再争抢一个全局 PostgreSQL 会话锁；运行中每 10 秒更新任务心跳，180 秒未续约的任务可由其他 worker 重新领取，尝试序号阻止旧 worker 覆盖新任务状态。每个文件的向量生命周期仍有独立同步锁，等待超过 30 秒会明确失败并写入日志，不会无限卡住。若通过 `uvicorn app:app` 启动 API，须另行运行 `uv run python worker.py`；`main.py` 可设置 `KNOWLEDGE_START_EMBEDDING_WORKER=0` 关闭自动拉起 worker。
+嵌入队列保存在 Knowledge 的 PostgreSQL `knowledge_embedding_jobs` 表。升级后端前执行 `cd backend`、`uv run alembic upgrade head`；随后以 `uv run python main.py` 启动，命令会在同一进程中启动后台异步 worker 领取任务，嵌入接口仅入队；切片及记录生成在线程池执行，Gateway 请求使用异步 HTTP。可选环境变量 `KNOWLEDGE_EMBEDDING_WORKERS=3` 控制同时处理的文件数（允许 1–16）。多个 worker 使用 `FOR UPDATE SKIP LOCKED` 领取不同文件任务，不再争抢一个全局 PostgreSQL 会话锁；运行中每 10 秒更新任务心跳，180 秒未续约的任务可由其他 worker 重新领取，尝试序号阻止旧 worker 覆盖新任务状态。每个文件的向量生命周期仍有独立同步锁，等待超过 30 秒会明确失败并写入日志，不会无限卡住。通过 `uvicorn app:app` 启动也会自动运行内置 worker；可设置 `KNOWLEDGE_START_EMBEDDING_WORKER=0` 关闭自动拉起 worker。
 
 点击“保存并嵌入”或“重试已保存草稿”会先保存正文，再立即返回任务 ID 与 `queued` 状态。`GET /api/knowledge-base/embedding-jobs` 可按当前登录用户查看最近任务，单个任务可通过 `GET /api/knowledge-base/embedding-jobs/{job_id}` 查询。状态依次为 `queued`、`running`、`succeeded` 或 `failed`；阶段包括 `checking`、`chunking`、`embedding`、`deleting_old`。Gateway 的向量 upsert 接口会在保存文本时生成 Embedding，没有单独提交预计算向量的接口，因此“生成并保存新向量”是同一个阶段。Knowledge 在查询结果中只展示本地标记为活动的切片，写入中的新一代切片不会提前作为检索结果返回。
 
@@ -105,3 +105,27 @@ Gateway 当前支持相似度查询和 metadata 精确过滤，但没有列出 c
 执行数据库迁移前，建议先对本项目数据库和 Gateway collection 做常规备份。迁移回滚会重建空的本地认证表结构，不会恢复已移除的旧用户名、密码哈希或会话；知识文档、切片和向量仍保留。不要用回滚恢复旧本地登录代码。
 
 向量客户端配置、批处理、重试与兼容性见 [Gateway 向量接入说明](backend/docs/gateway-vector-integration.md)。新配置支持 `GATEWAY_VECTOR_BASE_URL`、`GATEWAY_VECTOR_API_KEY`、`GATEWAY_VECTOR_COLLECTION` 和 `GATEWAY_EMBEDDING_MODEL`，兼容原配置。
+
+后端已按集成适配器与业务模块拆分，详见 [后端目录与模块边界](backend/docs/backend-architecture.md)。可移植网关统一入口为 [GatewayClient](backend/app/integrations/gateway/README.md)。
+
+## 独立 Gateway SDK（当前接入方式）
+
+SDK 已迁至相邻仓库 `gateway_api/src/gateway_client/`，Knowledge 使用 `agent-gateway-client` 的 editable 依赖。原 `app/integrations/gateway/` 仅兼容旧导入，原目录复制和独立打包方式已被替代。完整开发与部署说明见 `backend/docs/gateway-sdk-workflow.md`（后端文档中相对路径为 `docs/gateway-sdk-workflow.md`）。
+
+## Docker 部署
+
+服务器部署入口为 `compose.yaml`，详细步骤见 [部署说明](deploy/README.md)。需要相邻 `gateway_api` 仓库作为镜像构建输入。容器启动自动运行数据库迁移，前端通过 Nginx 同源访问 API。
+
+## 用户选择 Gateway 集合
+
+验证并保存 Key 后，在设置页选择该 Key 可访问的集合（或创建新集合），然后打开知识库。工作区“切换集合”返回设置页。
+选择按已验证用户 ID 保存在 PostgreSQL，不再使用环境变量写死目标；修改/删除 Key 会清除选择。
+未选择集合时，后端拒绝知识库操作。未完成嵌入任务期间不能切换；每个新任务记录提交时的目标集合。
+
+升级需要运行 `uv run alembic upgrade head`（20261009_06），原账号和文档不删除，旧用户首次需要手动选择原集合。
+旧的未完成任务没有目标快照，会明确失败并保留日志，选定集合后可重新提交，不会猜测目标。
+本地文档目录仍是当前用户的原文管理库；切换集合不会复制/删除本地文件，也不会自动将文档嵌入新集合。
+文档的嵌入指纹会区分 Gateway 与集合，目标改变后需手动嵌入。当前活动版本仍只追踪一个目标，不是多集合发布管理。
+回滚应用前可在备份后执行 `uv run alembic downgrade 20261009_05`，会移除新增选择/任务目标列，不删除文档。
+
+删除文档前会检查活动向量目标；若属于其他集合/网关，拒绝删除，提示切回对应目标。

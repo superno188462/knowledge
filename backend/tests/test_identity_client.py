@@ -5,7 +5,7 @@ import asyncio
 import httpx
 import pytest
 
-from services.auth.identity_client import (
+from app.integrations.identity.client import (
     IdentityCenterClient,
     IdentityCenterUnavailable,
     IdentityRequestRejected,

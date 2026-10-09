@@ -1,0 +1,2 @@
+# 原独立打包配置已经迁至 gateway_api/pyproject.toml。
+# 本目录仅兼容旧导入，不再从这里执行 uv build。

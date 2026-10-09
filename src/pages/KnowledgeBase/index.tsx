@@ -10,6 +10,7 @@ import {
   Tag,
   Typography,
 } from '@arco-design/web-react';
+import { Link } from 'react-router-dom';
 import KnowledgeHeader from '@/components/KnowledgeHeader';
 import {
   ChunkingRule,
@@ -790,6 +791,7 @@ export default function KnowledgeBasePage(): JSX.Element {
             )}
           </div>
           <div className={styles.toolbar}>
+            <Link to="/settings"><Button>切换集合</Button></Link>
             <Button disabled={!status?.exists} onClick={() => setCollectionConfigOpen(true)}>
               集合配置
             </Button>

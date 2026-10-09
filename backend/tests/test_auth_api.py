@@ -3,8 +3,10 @@
 from fastapi.testclient import TestClient
 import pytest
 
-import app as knowledge_app
-from services.auth.identity_client import (
+from app.bootstrap import app as knowledge_api
+from app import dependencies
+from app.modules.auth import dependencies as auth_dependencies
+from app.integrations.identity.client import (
     IdentityCenterUnavailable,
     IdentitySession,
     IdentityUser,
@@ -19,7 +21,7 @@ TOKEN_B = "b" * 48
 @pytest.fixture(autouse=True)
 def allow_test_origins(monkeypatch):
     monkeypatch.setattr(
-        knowledge_app,
+        auth_dependencies,
         "configured_origins",
         ["http://localhost:3001", "http://127.0.0.1:3001"],
     )
@@ -52,8 +54,8 @@ class FakeKnowledgeService:
 
 
 def test_register_login_and_me_use_identity_center_cookie(monkeypatch):
-    monkeypatch.setattr(knowledge_app, "get_identity_client", FakeIdentityClient)
-    client = TestClient(knowledge_app.app)
+    monkeypatch.setattr(dependencies, "get_identity_client", FakeIdentityClient)
+    client = TestClient(knowledge_api)
     payload = {"username": "alice", "password": "password-value-is-forwarded-only"}
 
     registered = client.post("/api/auth/register", json=payload, headers={"Origin": "http://localhost:3001"})
@@ -73,12 +75,12 @@ def test_register_login_and_me_use_identity_center_cookie(monkeypatch):
 
 
 def test_document_listing_uses_verified_identity_not_submitted_user_id(monkeypatch):
-    monkeypatch.setattr(knowledge_app, "get_identity_client", FakeIdentityClient)
+    monkeypatch.setattr(dependencies, "get_identity_client", FakeIdentityClient)
     async def fake_user_knowledge_service(user):
         return FakeKnowledgeService()
 
-    monkeypatch.setattr(knowledge_app, "_user_knowledge_service", fake_user_knowledge_service)
-    client = TestClient(knowledge_app.app)
+    monkeypatch.setattr(dependencies, "user_knowledge_service", fake_user_knowledge_service)
+    client = TestClient(knowledge_api)
     client.cookies.set("knowledge_identity_session", TOKEN_A)
 
     response = client.get("/api/knowledge-base/documents?user_id=canonical-b")
@@ -95,8 +97,8 @@ def test_identity_center_outage_is_reported_as_service_unavailable(monkeypatch):
         async def current_user(self, cookie_value):
             raise IdentityCenterUnavailable
 
-    monkeypatch.setattr(knowledge_app, "get_identity_client", OfflineIdentityClient)
-    client = TestClient(knowledge_app.app)
+    monkeypatch.setattr(dependencies, "get_identity_client", OfflineIdentityClient)
+    client = TestClient(knowledge_api)
     client.cookies.set("knowledge_identity_session", TOKEN_A)
     response = client.get("/api/auth/me")
     assert response.status_code == 503
@@ -104,16 +106,16 @@ def test_identity_center_outage_is_reported_as_service_unavailable(monkeypatch):
 
 
 def test_unauthenticated_user_cannot_access_business_api(monkeypatch):
-    monkeypatch.setattr(knowledge_app, "get_identity_client", FakeIdentityClient)
-    client = TestClient(knowledge_app.app)
+    monkeypatch.setattr(dependencies, "get_identity_client", FakeIdentityClient)
+    client = TestClient(knowledge_api)
     response = client.get("/api/knowledge-base/documents")
     assert response.status_code == 401
     assert response.json()["detail"]["code"] == "AUTH_REQUIRED"
 
 
 def test_logout_clears_browser_cookie_even_when_identity_center_is_offline(monkeypatch):
-    monkeypatch.setattr(knowledge_app, "get_identity_client", FakeIdentityClient)
-    client = TestClient(knowledge_app.app)
+    monkeypatch.setattr(dependencies, "get_identity_client", FakeIdentityClient)
+    client = TestClient(knowledge_api)
     client.cookies.set("knowledge_identity_session", TOKEN_A)
     response = client.post("/api/auth/logout", headers={"Origin": "http://localhost:3001"})
     assert response.status_code == 503
@@ -121,7 +123,7 @@ def test_logout_clears_browser_cookie_even_when_identity_center_is_offline(monke
 
 
 def test_cors_allows_exact_local_frontend_origin():
-    client = TestClient(knowledge_app.app)
+    client = TestClient(knowledge_api)
     response = client.options(
         "/api/auth/me",
         headers={

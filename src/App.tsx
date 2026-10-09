@@ -56,7 +56,7 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <LoginPage />} />
-      <Route path="/" element={<Navigate to={user && gatewayStatus?.valid ? '/knowledge-base' : user ? '/user-context' : '/login'} replace />} />
+      <Route path="/" element={<Navigate to={user && gatewayStatus?.valid && gatewayStatus?.knowledge_ready ? '/knowledge-base' : user ? '/user-context' : '/login'} replace />} />
       <Route
         path="/settings"
         element={
@@ -75,7 +75,7 @@ function AppRoutes() {
         path="/knowledge-base"
         element={
           <RequireAuth>
-            {gatewayLoading ? <AuthLoading /> : gatewayStatus?.valid ? <KnowledgeBasePage /> : <Navigate to="/settings" replace />}
+            {gatewayLoading ? <AuthLoading /> : gatewayStatus?.valid && gatewayStatus?.knowledge_ready ? <KnowledgeBasePage /> : <Navigate to="/settings" replace />}
           </RequireAuth>
         }
       />
