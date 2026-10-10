@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from uuid import uuid4
 
 import httpx
 
@@ -17,6 +18,7 @@ class MemoryRepository:
     def __init__(self) -> None:
         self.documents: dict[str, dict] = {}
         self.chunks: dict[str, dict[str, dict]] = {}
+        self.plans = {}
 
     async def get_document_by_path(self, path, owner_user_id):
         document = next((item for item in self.documents.values() if item.get("path") == path and item.get("owner_user_id") == owner_user_id), None)
@@ -31,6 +33,33 @@ class MemoryRepository:
             "sync_status": document.get("sync_status"),
         }
 
+    async def prepare_embedding_plan(self, document_id, owner_user_id, signature, title, path):
+        plan = self.plans.get(document_id, {})
+        if plan.get("signature") != signature:
+            plan = {"signature": signature, "version_id": uuid4().hex}
+            self.plans[document_id] = plan
+        return plan.copy()
+
+    async def set_embedding_plan_state(self, document_id, state):
+        self.plans[document_id]["state"] = state
+
+    async def get_record_groups(self, document_id, owner_user_id, target_fingerprint):
+        if self.documents.get(document_id, {}).get("owner_user_id") != owner_user_id:
+            return {"children": [], "parents": []}
+        rows = self.chunks.get(document_id, {})
+        return {"children": list(rows), "parents": list(dict.fromkeys(
+            row["parent_id"] for row in rows.values() if row.get("parent_id")))}
+
+    async def remove_inactive_records(self, document_id, target_fingerprint):
+        self.chunks[document_id] = {key: value for key, value in self.chunks[document_id].items()
+                                    if value.get("is_active")}
+
+    async def mark_cleanup_pending(self, document_id):
+        self.documents[document_id]["sync_status"] = "cleanup_pending"
+
+    async def get_document_detail(self, document_id, owner_user_id):
+        return await self.get_document_by_id(document_id, owner_user_id)
+
     async def stage_document(self, **values):
         document_id = values["document_id"]
         old_ids = [
@@ -42,13 +71,15 @@ class MemoryRepository:
         current.update({chunk["id"]: {**chunk, "target_fingerprint": values["target_fingerprint"]} for chunk in values["chunks"]})
         return old_ids
 
-    async def finish_sync(self, document_id, active_ids, target_fingerprint):
-        self.chunks[document_id] = {
-            chunk_id: chunk for chunk_id, chunk in self.chunks[document_id].items()
-            if chunk_id in set(active_ids)
-        }
+    async def finish_sync(self, document_id, active_ids, target_fingerprint, *, keep_inactive=False):
+        active = set(active_ids)
+        for chunk_id, chunk in self.chunks[document_id].items():
+            chunk["is_active"] = chunk_id in active
+        if not keep_inactive:
+            self.chunks[document_id] = {key: value for key, value in self.chunks[document_id].items() if key in active}
         self.documents[document_id]["sync_status"] = "ready"
         self.documents[document_id]["embedded_target_fingerprint"] = target_fingerprint
+        self.plans[document_id]["state"] = "published"
 
     async def mark_failed(self, document_id, error_code=None):
         self.documents[document_id]["sync_status"] = "failed"
@@ -174,6 +205,9 @@ class GatewayVectorStoreTests(unittest.IsolatedAsyncioTestCase):
             if request.url.path.endswith("/upsert"):
                 vectors = json.loads(request.content)["vectors"]
                 return httpx.Response(200, json={"upserted": [{"external_id": item["id"]} for item in vectors]})
+            if request.url.path.endswith("/publish"):
+                payload = json.loads(request.content)
+                return httpx.Response(200, json={"version_id": payload["version_id"], "published_records": 1})
             if request.url.path.endswith("/delete"):
                 return httpx.Response(200, json={"deleted": len(json.loads(request.content)["ids"])})
             return httpx.Response(200, json={"results": []})
@@ -239,7 +273,7 @@ class GatewayVectorStoreTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(caught.exception.code, "VECTOR_GATEWAY_INCOMPLETE_UPSERT")
         self.assertEqual(repository.documents["partial-1"]["sync_status"], "failed")
-        self.assertTrue(any(request.url.path.endswith("/delete") for request in requests))
+        self.assertFalse(any(request.url.path.endswith("/delete") or request.url.path.endswith("/publish") for request in requests))
 
     async def test_metadata_filter_results_group_by_parent_document(self) -> None:
         requests: list[httpx.Request] = []
@@ -309,6 +343,8 @@ class GatewayVectorStoreTests(unittest.IsolatedAsyncioTestCase):
 
         def handler(request: httpx.Request) -> httpx.Response:
             requests.append(request)
+            if request.method == "GET":
+                return httpx.Response(200, json=[{"collection": "knowledge-kb-test", "id": "c"}])
             return httpx.Response(200, json={"results": []} if request.url.path.endswith("/query") else {"deleted": 2})
 
         repository = MemoryRepository()
@@ -316,7 +352,7 @@ class GatewayVectorStoreTests(unittest.IsolatedAsyncioTestCase):
         repository.chunks["doc"] = {"v1": {}, "v2": {}}
         service = KnowledgeBaseService(self.make_store(handler), repository=repository)
         await service.delete_document("doc", owner_user_id="owner-a")
-        self.assertEqual(json.loads(requests[0].content), {"ids": ["v1", "v2"]})
+        self.assertEqual(json.loads(next(request.content for request in requests if request.url.path.endswith("/delete"))), {"ids": ["v1", "v2"]})
         self.assertNotIn("doc", repository.documents)
 
     async def test_gateway_error_does_not_expose_upstream_detail_or_key(self) -> None:
@@ -330,3 +366,101 @@ class GatewayVectorStoreTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ParentChildLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    make_store = GatewayVectorStoreTests.make_store
+    async def exercise_document(self, service, content="## 标题\n" + "正文。" * 100):
+        return await service.upsert_document(
+            owner_user_id="owner-a", document_id="doc", title="manual", file_name="manual.md",
+            content=content, metadata={}, chunking_config={
+                "strategy": "structure", "chunk_size": 100, "overlap": 10,
+                "hierarchy_enabled": True, "parent_chunk_size": 500, "parent_heading_level": 2,
+            })
+
+    def lifecycle(self):
+        state = {"seen": [], "publish_fail": False, "delete_fail": False}
+        def handler(request):
+            payload = json.loads(request.content) if request.content else None
+            state["seen"].append((request.url.path.rsplit("/", 1)[-1], payload))
+            if request.method == "GET":
+                return httpx.Response(200, json=[{"collection": "knowledge-kb-test", "id": "c", "chunk_size": 100}])
+            if request.url.path.endswith("/upsert"):
+                return httpx.Response(200, json={"upserted": [{"external_id": r["id"]} for r in payload["vectors"]]})
+            if request.url.path.endswith("/publish"):
+                if state["publish_fail"]:
+                    raise httpx.ReadTimeout("mock timeout", request=request)
+                return httpx.Response(200, json={"version_id": payload["version_id"], "published_records": 5})
+            if state["delete_fail"]:
+                return httpx.Response(500, json={"detail": {"code": "test_failure"}})
+            return httpx.Response(200, json={"deleted": len(payload["ids"])})
+        repo = MemoryRepository()
+        return state, repo, KnowledgeBaseService(self.make_store(handler), repository=repo)
+
+    async def test_parent_first_publish_then_cleanup_and_new_generation(self):
+        state, repo, service = self.lifecycle()
+        await self.exercise_document(service)
+        batches = [p["vectors"] for op, p in state["seen"] if op == "upsert"]
+        parents, children = batches
+        self.assertTrue(all(r["record_kind"] == "document" for r in parents))
+        self.assertTrue(all(r["metadata"]["document_id"] == "doc" for r in parents))
+        self.assertTrue(all(r["record_kind"] == "vector" for r in children))
+        self.assertTrue(all(r["parent_id"] in {p["id"] for p in parents} for r in children))
+        self.assertTrue(all(r["staged"] and r["metadata"]["source"] == "manual.md" for r in parents + children))
+        self.assertFalse(any("parent_content" in r or "parent_content" in r["metadata"] for r in children))
+        original_version = repo.plans["doc"]["version_id"]
+        state["seen"].clear()
+        await self.exercise_document(service, "## 新标题\n" + "新的正文。" * 50)
+        ops = [op for op, _ in state["seen"]]
+        self.assertLess(ops.index("publish"), ops.index("delete"))
+        deletes = [p["ids"] for op, p in state["seen"] if op == "delete"]
+        self.assertEqual(set(deletes[0]), {r["id"] for r in children})
+        self.assertEqual(set(deletes[1]), {r["id"] for r in parents})
+        await self.exercise_document(service)
+        self.assertNotEqual(original_version, repo.plans["doc"]["version_id"])
+
+    async def test_publication_timeout_retains_records_and_retry_ids(self):
+        state, repo, service = self.lifecycle()
+        state["publish_fail"] = True
+        with self.assertRaises(GatewayVectorStoreError) as caught:
+            await self.exercise_document(service)
+        self.assertEqual(caught.exception.code, "VECTOR_PUBLICATION_PENDING")
+        self.assertEqual(repo.plans["doc"]["state"], "publishing")
+        self.assertFalse(any(op == "delete" for op, _ in state["seen"]))
+        ids = set(repo.chunks["doc"])
+        state["publish_fail"] = False
+        await self.exercise_document(service)
+        self.assertEqual(ids, set(repo.chunks["doc"]))
+        self.assertEqual(repo.documents["doc"]["sync_status"], "ready")
+
+    async def test_cleanup_failure_keeps_publication_and_retry_cleans(self):
+        state, repo, service = self.lifecycle()
+        await self.exercise_document(service)
+        state["delete_fail"] = True
+        result = await self.exercise_document(service, "更新正文。" * 40)
+        self.assertTrue(result["result"]["cleanup_pending"])
+        self.assertEqual(repo.plans["doc"]["state"], "published")
+        self.assertEqual(repo.documents["doc"]["sync_status"], "cleanup_pending")
+        version = repo.plans["doc"]["version_id"]
+        state["delete_fail"] = False
+        await self.exercise_document(service, "更新正文。" * 40)
+        self.assertEqual(version, repo.plans["doc"]["version_id"])
+        self.assertTrue(all(r["is_active"] for r in repo.chunks["doc"].values()))
+        self.assertEqual(repo.documents["doc"]["sync_status"], "ready")
+
+    async def test_search_fetches_gateway_parent_and_degrades_missing(self):
+        missing = False
+        def handler(request):
+            if request.url.path.endswith("/query"):
+                return httpx.Response(200, json={"results": [{"external_id": "child", "parent_id": "parent",
+                    "content": "子块", "score": .9, "metadata": {"document_id": "doc", "vector_storage_version": 2}}]})
+            return httpx.Response(200, json={"records": [] if missing else [{"id": "parent", "record_kind": "document",
+                "content": "完整父块", "metadata": {"owner_user_id": "owner-a", "record_type": "knowledge_parent", "document_id": "doc"}}],
+                "missing_ids": ["parent"] if missing else []})
+        service = KnowledgeBaseService(self.make_store(handler), repository=MemoryRepository())
+        hits = await service.search("问题", owner_user_id="owner-a")
+        self.assertEqual(hits[0]["context_content"], "完整父块")
+        missing = True
+        hits = await service.search("问题", owner_user_id="owner-a")
+        self.assertEqual(hits[0]["context_content"], "子块")
+        self.assertEqual(hits[0]["context_status"], "missing")

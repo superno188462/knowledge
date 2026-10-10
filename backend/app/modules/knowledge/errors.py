@@ -4,6 +4,14 @@ from app.integrations.gateway.errors import GatewayVectorStoreError
 
 def vector_gateway_error(error: GatewayVectorStoreError) -> HTTPException:
     status = {
+        "VECTOR_PARENT_NOT_FOUND": 404,
+        "VECTOR_PARENT_IN_USE": 409,
+        "VECTOR_VERSION_IMMUTABLE": 409,
+        "VECTOR_VERSION_RETIRED": 409,
+        "VECTOR_PUBLICATION_HISTORY_UNKNOWN": 409,
+        "VECTOR_STAGED_VERSION_NOT_FOUND": 404,
+        "VECTOR_REQUEST_TOO_LARGE": 413,
+        "VECTOR_PUBLICATION_PENDING": 503,
         "VECTOR_DOCUMENT_TARGET_MISMATCH": 409,
         "VECTOR_STORE_NOT_CONFIGURED": 503,
         "VECTOR_DIMENSIONS_CONFIG_INVALID": 503,
@@ -34,6 +42,14 @@ def vector_gateway_error(error: GatewayVectorStoreError) -> HTTPException:
         "VECTOR_DUPLICATE_RECORD_ID": 500,
     }.get(error.code, 502)
     messages = {
+        "VECTOR_PARENT_NOT_FOUND": "父块记录不存在，请重新嵌入该文档。",
+        "VECTOR_PARENT_IN_USE": "父块仍被子片引用，需先删除相关子片。",
+        "VECTOR_VERSION_IMMUTABLE": "已发布版本不能修改，请保存新版本后再嵌入。",
+        "VECTOR_VERSION_RETIRED": "该版本已经退役，请保存新版本后再嵌入。",
+        "VECTOR_PUBLICATION_HISTORY_UNKNOWN": "Gateway 旧版本发布历史不明，请使用新版本重新嵌入。",
+        "VECTOR_STAGED_VERSION_NOT_FOUND": "暂存版本不存在，请重新提交嵌入。",
+        "VECTOR_REQUEST_TOO_LARGE": "记录批次超过 Gateway 请求大小限制。",
+        "VECTOR_PUBLICATION_PENDING": "版本发布结果未确认，请重试原任务。新记录已保留，请勿更换目标或修改文档。",
         "VECTOR_DOCUMENT_TARGET_MISMATCH": "此文档的活动向量属于其他网关或集合，请切换回对应集合后删除。",
         "VECTOR_STORE_NOT_CONFIGURED": "服务端尚未配置 Gateway URL 和 collection。",
         "VECTOR_COLLECTION_MODEL_MISMATCH": "已有集合绑定了不同的 Embedding 模型。",

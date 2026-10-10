@@ -117,19 +117,30 @@ class EmbeddingQueue:
             return False
         factory = get_session_factory()
         async with factory() as session:
-            return bool(await session.scalar(select(KnowledgeEmbeddingJob.id).where(
+            active = bool(await session.scalar(select(KnowledgeEmbeddingJob.id).where(
                 KnowledgeEmbeddingJob.owner_user_id == owner_user_id,
                 KnowledgeEmbeddingJob.document_id.in_(set(document_ids)),
                 KnowledgeEmbeddingJob.status.in_(_ACTIVE_STATUSES),
             ).limit(1)))
+            pending_publish = await session.scalar(select(KnowledgeDocument.id).where(
+                KnowledgeDocument.owner_user_id == owner_user_id,
+                KnowledgeDocument.id.in_(set(document_ids)),
+                KnowledgeDocument.embedding_plan["state"].astext == "publishing",
+            ).limit(1))
+            return active or pending_publish is not None
 
     async def has_active_jobs(self, owner_user_id: str) -> bool:
         """切换集合/凭据前检查本用户未完成任务。"""
         async with get_session_factory()() as session:
-            return bool(await session.scalar(select(KnowledgeEmbeddingJob.id).where(
+            active = bool(await session.scalar(select(KnowledgeEmbeddingJob.id).where(
                 KnowledgeEmbeddingJob.owner_user_id == owner_user_id,
                 KnowledgeEmbeddingJob.status.in_(_ACTIVE_STATUSES),
             ).limit(1)))
+            pending_publish = await session.scalar(select(KnowledgeDocument.id).where(
+                KnowledgeDocument.owner_user_id == owner_user_id,
+                KnowledgeDocument.embedding_plan["state"].astext == "publishing",
+            ).limit(1))
+            return active or pending_publish is not None
 
     async def _claim(self) -> tuple[str, str, str, int, str | None] | None:
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=_LEASE_SECONDS)
@@ -238,6 +249,8 @@ class EmbeddingQueue:
             job.finished_at = datetime.now(timezone.utc)
             job.heartbeat_at = None
             document = await session.get(KnowledgeDocument, document_id)
+            if not error_code and document is not None and document.sync_status == "cleanup_pending":
+                job.stage = "cleanup_pending"
             add_activity(session, owner_user_id=job.owner_user_id, document_id=document_id,
                          job_id=job.id, path=_document_path(document),
                          event_type="embedding_failed" if error_code else "embedding_succeeded",

@@ -8,7 +8,7 @@ resolution-markers = [
 
 [[package]]
 name = "agent-gateway-client"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "../../gateway_api" }
 dependencies = [
     { name = "httpx" },

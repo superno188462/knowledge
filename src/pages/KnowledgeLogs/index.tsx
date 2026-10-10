@@ -14,6 +14,8 @@ const labels: Record<string, string> = {
   embedding_embedding: '开始向量写入', embedding_chunk_completed: '切片写入完成',
   embedding_deleting_old: '清理旧向量', embedding_succeeded: '嵌入成功',
   embedding_failed: '嵌入失败',
+  embedding_saving_parents: '保存父块正文', embedding_publishing: '发布新版本',
+  embedding_cleanup_pending: '已发布，旧数据待清理',
 };
 
 function progress(log: KnowledgeActivityLog): string {

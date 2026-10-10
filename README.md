@@ -129,3 +129,7 @@ SDK 已迁至相邻仓库 `gateway_api/src/gateway_client/`，Knowledge 使用 `
 回滚应用前可在备份后执行 `uv run alembic downgrade 20261009_05`，会移除新增选择/任务目标列，不删除文档。
 
 删除文档前会检查活动向量目标；若属于其他集合/网关，拒绝删除，提示切回对应目标。
+
+## Gateway 普通父块与版本发布
+
+父块现保存到 Gateway 普通记录，子片通过顶层 parent_id 关联；全部写入后 publish，检索通过 Gateway fetch 还原上下文。SDK 升级至 0.2.0，数据库需迁移至 20261010_07。旧文档允许直接重新嵌入。详细说明见 backend/docs/gateway-parent-child.md。

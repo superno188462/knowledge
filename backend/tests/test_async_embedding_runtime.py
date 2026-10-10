@@ -62,9 +62,13 @@ class AsyncEmbeddingRuntimeTests(unittest.IsolatedAsyncioTestCase):
             get_effective_rule=AsyncMock(return_value=None),
             stage_document=AsyncMock(return_value=[]),
             finish_sync=AsyncMock(),
+            prepare_embedding_plan=AsyncMock(return_value={"version_id": "v1"}),
+            get_record_groups=AsyncMock(return_value={"children": [], "parents": []}),
+            set_embedding_plan_state=AsyncMock(), remove_inactive_records=AsyncMock(),
         )
         vectors = SimpleNamespace(
             add_vectors=AsyncMock(return_value={"upserted": ["record"]}),
+            publish_version=AsyncMock(),
         )
         service = KnowledgeBaseService(vector_store=vectors, repository=repository)
         service.status = AsyncMock(return_value={"exists": True, "chunk_size": 1000})

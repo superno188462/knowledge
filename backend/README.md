@@ -69,3 +69,7 @@ Gateway 暂无全量向量列表接口，跨应用检索是相似度查询，不
 ## 独立 Gateway SDK（当前接入方式）
 
 SDK 已迁至相邻仓库 `gateway_api/src/gateway_client/`，Knowledge 使用 `agent-gateway-client` 的 editable 依赖。原 `app/integrations/gateway/` 仅兼容旧导入，原目录复制和独立打包方式已被替代。完整开发与部署说明见 `backend/docs/gateway-sdk-workflow.md`（后端文档中相对路径为 `docs/gateway-sdk-workflow.md`）。
+
+## Gateway 普通父块与版本发布
+
+父块现保存到 Gateway 普通记录，子片通过顶层 parent_id 关联；全部写入后 publish，检索通过 Gateway fetch 还原上下文。SDK 升级至 0.2.0，数据库需迁移至 20261010_07。旧文档允许直接重新嵌入。详细说明见 backend/docs/gateway-parent-child.md。

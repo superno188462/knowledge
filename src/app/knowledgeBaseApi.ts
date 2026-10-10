@@ -71,12 +71,12 @@ export interface KnowledgeDocumentResult {
   };
 }
 
-/** A durable file-level embedding request. `succeeded` means every chunk was confirmed. */
+/** 持久化嵌入任务；succeeded 表示写入且发布确认，cleanup_pending 表示旧数据仍待清理。 */
 export interface KnowledgeEmbeddingJob {
   job_id: string;
   document_id: string;
   status: 'queued' | 'running' | 'succeeded' | 'failed';
-  stage: 'queued' | 'checking' | 'chunking' | 'embedding' | 'deleting_old' | 'succeeded' | 'failed';
+  stage: 'queued' | 'checking' | 'chunking' | 'saving_parents' | 'embedding' | 'publishing' | 'cleanup_pending' | 'deleting_old' | 'succeeded' | 'failed';
   completed_chunks: number;
   total_chunks: number | null;
   error_code: string | null;
@@ -118,6 +118,7 @@ export interface KnowledgeHit {
   title: string;
   content: string;
   context_content?: string;
+  context_status?: 'available' | 'missing';
   parent_id?: string | null;
   score: number | null;
   metadata: Record<string, unknown>;

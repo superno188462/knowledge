@@ -31,6 +31,7 @@ class KnowledgeDocument(Base):
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     embedded_target_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     chunking_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    embedding_plan: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     pending_document: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     sync_status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     sync_error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)

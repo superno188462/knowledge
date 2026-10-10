@@ -53,6 +53,63 @@ class KnowledgeBaseRepository:
                 await connection.execute(text("SELECT pg_advisory_unlock(:lock_id)"), {"lock_id": lock_id})
                 await connection.commit()
 
+    async def prepare_embedding_plan(self, document_id: str, owner_user_id: str,
+                                     signature: str, title: str, path: str) -> dict[str, str]:
+        """固定本次重试的版本 ID；内容/规则/目标改变时分配新版本，允许内容回退。"""
+        async with get_session_factory().begin() as session:
+            document = await session.get(KnowledgeDocument, document_id, with_for_update=True)
+            if document is None:
+                document = KnowledgeDocument(id=document_id, owner_user_id=owner_user_id,
+                                             title=title, path=path, content_sha256="",
+                                             metadata_json={}, sync_status="pending")
+                session.add(document)
+            if document.owner_user_id != owner_user_id:
+                raise PermissionError("DOCUMENT_NOT_OWNED")
+            plan = document.embedding_plan or {}
+            if plan.get("signature") != signature:
+                if plan.get("state") == "publishing":
+                    raise ValueError("上一版本发布结果尚未确认，请先重试原任务。")
+                plan = {"signature": signature, "version_id": uuid4().hex}
+                document.embedding_plan = plan
+            return dict(plan)
+
+    async def set_embedding_plan_state(self, document_id: str, state: str) -> None:
+        async with get_session_factory().begin() as session:
+            document = await session.get(KnowledgeDocument, document_id, with_for_update=True)
+            if document is not None:
+                document.embedding_plan = {**(document.embedding_plan or {}), "state": state}
+
+    async def get_record_groups(self, document_id: str, owner_user_id: str,
+                                target_fingerprint: str) -> dict[str, list[str]]:
+        """读取当前目标的子片和父块映射，含失败及待清理代。"""
+        async with get_session_factory()() as session:
+            rows = (await session.scalars(select(KnowledgeChunk)
+                    .join(KnowledgeDocument, KnowledgeDocument.id == KnowledgeChunk.document_id)
+                    .where(KnowledgeChunk.document_id == document_id,
+                           KnowledgeDocument.owner_user_id == owner_user_id,
+                           or_(KnowledgeChunk.target_fingerprint == target_fingerprint,
+                               KnowledgeChunk.target_fingerprint.is_(None))))).all()
+            return {"children": [row.id for row in rows],
+                    "parents": list(dict.fromkeys(row.parent_id for row in rows if row.parent_id))}
+
+    async def remove_inactive_records(self, document_id: str, target_fingerprint: str) -> None:
+        """外部清理已确认后移除对应目标的旧映射。"""
+        async with get_session_factory().begin() as session:
+            rows = (await session.scalars(select(KnowledgeChunk).where(
+                KnowledgeChunk.document_id == document_id, KnowledgeChunk.is_active.is_(False),
+                or_(KnowledgeChunk.target_fingerprint == target_fingerprint,
+                    KnowledgeChunk.target_fingerprint.is_(None))))).all()
+            for row in rows:
+                await session.delete(row)
+
+    async def mark_cleanup_pending(self, document_id: str) -> None:
+        """发布已经成功；旧记录清理失败不撤销活动版本。"""
+        async with get_session_factory().begin() as session:
+            document = await session.get(KnowledgeDocument, document_id)
+            if document is not None:
+                document.sync_status = "cleanup_pending"
+                document.sync_error_code = "VECTOR_CLEANUP_PENDING"
+
     async def stage_document(
         self,
         *,
@@ -138,6 +195,8 @@ class KnowledgeBaseRepository:
                 document = await session.get(KnowledgeDocument, document_id, with_for_update=True)
                 if document is not None and document.owner_user_id != owner_user_id:
                     raise PermissionError("DOCUMENT_NOT_OWNED")
+                if document is not None and (document.embedding_plan or {}).get("state") == "publishing":
+                    raise ValueError("发布结果尚未确认，请先重试嵌入确认原版本，再编辑文档。")
                 if document is not None and await session.scalar(select(KnowledgeEmbeddingJob.id).where(
                     KnowledgeEmbeddingJob.document_id == document_id,
                     KnowledgeEmbeddingJob.status.in_(("queued", "running")),
@@ -172,7 +231,7 @@ class KnowledgeBaseRepository:
                              path=path, event_type="document_draft_saved", status="success")
 
     async def finish_sync(
-        self, document_id: str, active_ids: list[str], target_fingerprint: str
+        self, document_id: str, active_ids: list[str], target_fingerprint: str, *, keep_inactive: bool = False
     ) -> None:
         """标记目标切片生效并清除已从 Gateway 删除的旧映射。"""
 
@@ -189,6 +248,8 @@ class KnowledgeBaseRepository:
                 for row in rows:
                     if row.id in active:
                         row.is_active = True
+                    elif keep_inactive:
+                        row.is_active = False
                     else:
                         await session.delete(row)
                 pending = document.pending_document or {}
@@ -204,6 +265,8 @@ class KnowledgeBaseRepository:
                 document.sync_status = "ready"
                 document.sync_error_code = None
                 document.embedded_target_fingerprint = target_fingerprint
+                if document.embedding_plan:
+                    document.embedding_plan = {**document.embedding_plan, "state": "published"}
 
     async def mark_failed(self, document_id: str, error_code: str | None = None) -> None:
         """保留旧活动版本和失败代的 ID 映射，供后续重试/删除清理。"""

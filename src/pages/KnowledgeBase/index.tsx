@@ -53,11 +53,13 @@ function syncFailureLabel(code?: string | null): string {
   if (code === 'SOURCE_REQUIRED') return '需重新上传原文';
   if (code?.includes('QUOTA')) return 'Embedding 额度不足';
   if (code?.includes('AUTH')) return 'Gateway Key 无效';
+  if (code === 'VECTOR_PUBLICATION_PENDING') return '发布结果待确认，请重试原任务';
   if (code?.includes('TIMEOUT')) return '请求超时，写入结果未确认';
   return '嵌入失败，可重试';
 }
 
 function syncStatusLabel(status?: string): string {
+  if (status === 'cleanup_pending') return '已发布，旧数据待清理';
   if (status === 'ready') return '已嵌入';
   if (status === 'failed') return '嵌入失败';
   if (status === 'pending') return '待手动嵌入';
@@ -73,7 +75,7 @@ function visibleSyncStatus(
   gatewayStatus: KnowledgeBaseStatus | null
 ): string | undefined {
   if (
-    document.sync_status === 'ready' &&
+    ['ready', 'cleanup_pending'].includes(document.sync_status || '') &&
     gatewayStatus &&
     (!gatewayStatus.exists || document.embedded_target_fingerprint !== gatewayStatus.target_fingerprint)
   ) {
@@ -83,12 +85,16 @@ function visibleSyncStatus(
 }
 
 function jobStageLabel(job: KnowledgeEmbeddingJob): string {
+  if (job.stage === 'cleanup_pending') return '已发布，旧数据待清理';
   if (job.status === 'succeeded') return '全部完成';
   if (job.status === 'failed') return syncFailureLabel(job.error_code);
   const labels: Record<string, string> = {
     queued: '排队中',
     checking: '校验是否需要嵌入',
     chunking: '切片中',
+    saving_parents: '保存父块正文',
+    publishing: '发布新版本',
+    cleanup_pending: '已发布，旧数据待清理',
     embedding: '生成并保存新向量',
     deleting_old: '清理旧向量',
   };
@@ -1012,7 +1018,7 @@ export default function KnowledgeBasePage(): JSX.Element {
                         ? `${document.chunk_count || 0} 片已嵌入`
                         : syncStatusLabel(currentSyncStatus)}
                     </Tag>
-                    {(currentSyncStatus === 'failed' || currentSyncStatus === 'pending' || currentSyncStatus === 'target_changed') && (
+                    {(currentSyncStatus === 'failed' || currentSyncStatus === 'pending' || currentSyncStatus === 'target_changed' || currentSyncStatus === 'cleanup_pending') && (
                       <Button
                         disabled={!isReady || saving}
                         onClick={async () => {
@@ -1059,6 +1065,12 @@ export default function KnowledgeBasePage(): JSX.Element {
                           : '该文档尚无已嵌入版本；修复额度或网络后可以重试。'
                       }
                     />
+                  )}
+                  {currentSyncStatus === 'cleanup_pending' && (
+                    <Alert type="warning" title="新版本已发布，旧数据待清理" content="检索已使用新版本；点击重试可继续清理旧子片和父块，不会撤销发布。" />
+                  )}
+                  {document.sync_error_code === 'VECTOR_PUBLICATION_PENDING' && (
+                    <Alert type="warning" title="发布结果待确认" content="Gateway 可能已发布该版本。请重试原任务确认结果，暂时不要编辑文档或切换集合。" />
                   )}
                   {currentSyncStatus === 'pending' && (
                     <Alert

@@ -91,7 +91,7 @@ def validate_chunking_rule(rule: dict[str, Any] | None, gateway_max: int) -> Non
 def _prepare_vector_records(
     content: str, chunk_size: int, effective_rule: dict[str, Any], markdown: bool,
     stable_id: str, content_hash: str, document_metadata: dict[str, Any],
-    title: str, path: str, target_fingerprint: str,
+    title: str, path: str, target_fingerprint: str, version_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """在线程中完成切片、稳定 ID 和逐条元数据生成；不访问数据库或 Gateway。"""
     pieces = split_document_with_rule(
@@ -108,6 +108,7 @@ def _prepare_vector_records(
         "title": title,
         "target": target_fingerprint,
     }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
+    generation_hash = version_id or generation_hash
     records = []
     for index, piece in enumerate(pieces):
         parent_index = piece["parent_index"]
@@ -136,6 +137,11 @@ def _prepare_vector_records(
             "chunk_index": index,
             "parent_id": parent_id,
             "parent_content": piece["parent_content"],
+            "record_kind": "vector",
+            "namespace": "knowledge-platform:" + str(document_metadata["owner_user_id"]),
+            "document_id": stable_id,
+            "version_id": generation_hash,
+            "staged": True,
         })
     return records
 
@@ -440,6 +446,7 @@ class KnowledgeBaseService:
             }
             validate_chunking_rule(effective_rule, chunk_size)
             document_metadata["chunking_rule"] = effective_rule
+            document_metadata["vector_storage_version"] = 2
             active_reader = getattr(self.repository, "get_active_version", None)
             active = await active_reader(stable_id, owner_user_id) if active_reader else None
             comparison = active or (existing if existing and existing.get("sync_status") == "ready" else None)
@@ -453,7 +460,7 @@ class KnowledgeBaseService:
                 and not comparison.get("has_inactive", False)
             ):
                 if active and active["active_ids"]:
-                    await self.repository.finish_sync(stable_id, active["active_ids"], target_fingerprint)
+                    await self.repository.finish_sync(stable_id, active["active_ids"], target_fingerprint, keep_inactive=True)
                 results.append({
                     "id": stable_id,
                     "result": {"vectors": 0, "chunks": existing.get("chunk_count", 0), "action": "unchanged"},
@@ -463,11 +470,20 @@ class KnowledgeBaseService:
             markdown = PurePosixPath(path).suffix.lower() == ".md"
             if progress:
                 await progress("chunking", 0, None)
+            signature = hashlib.sha256(json.dumps({
+                "content": content_hash, "rule": effective_rule, "metadata": document_metadata,
+                "title": title, "target": target_fingerprint,
+            }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+            plan = await self.repository.prepare_embedding_plan(
+                stable_id, owner_user_id, signature, title, path,
+            )
             records = await asyncio.to_thread(
                 _prepare_vector_records, content, chunk_size, effective_rule, markdown,
                 stable_id, content_hash, document_metadata, title, path, target_fingerprint,
+                plan["version_id"],
             )
-            old_ids = await self.repository.stage_document(
+            old_groups = await self.repository.get_record_groups(stable_id, owner_user_id, target_fingerprint)
+            await self.repository.stage_document(
                 document_id=stable_id,
                 owner_user_id=owner_user_id,
                 title=title,
@@ -481,8 +497,23 @@ class KnowledgeBaseService:
                 chunks=records,
             )
             target_ids = [record["id"] for record in records]
+            parents = {}
+            for record in records:
+                if record["parent_id"]:
+                    parents[record["parent_id"]] = {
+                        "id": record["parent_id"], "title": title,
+                        "record_kind": "document", "content": record["parent_content"],
+                        "namespace": record["namespace"], "document_id": stable_id,
+                        "version_id": plan["version_id"], "staged": True,
+                        "metadata": {**document_metadata, "document_id": stable_id, "record_type": "knowledge_parent",
+                                     "parent_id": record["parent_id"]},
+                    }
+            publish_attempted = False
             try:
-                written = 0
+                if parents:
+                    if progress:
+                        await progress("saving_parents", 0, len(records))
+                    await self.vector_store.add_records(list(parents.values()))
                 if progress:
                     await progress("embedding", 0, len(records))
                 async def batch_progress(completed: int, total: int) -> None:
@@ -490,39 +521,49 @@ class KnowledgeBaseService:
                         await progress("embedding", completed, total)
 
                 response = await self.vector_store.add_vectors([
-                    {key: record[key] for key in ("id", "title", "content", "metadata")}
-                    for record in records
+                    {key: record[key] for key in (
+                        "id", "title", "content", "metadata", "record_kind", "parent_id",
+                        "namespace", "document_id", "version_id", "staged",
+                    )} for record in records
                 ], on_batch=batch_progress)
                 written = len(response["upserted"])
                 if progress:
+                    await progress("publishing", written, len(records))
+                await self.repository.set_embedding_plan_state(stable_id, "publishing")
+                publish_attempted = True
+                await self.vector_store.publish_version(records[0]["namespace"], stable_id, plan["version_id"])
+                # 外部发布后先提交本地活动代，旧数据清理失败不能回滚已发布版本。
+                await self.repository.finish_sync(stable_id, target_ids, target_fingerprint, keep_inactive=True)
+            except Exception as error:
+                # 不自动删除失败代：publish 超时/取消可能已生效，确定性 ID 支持重试。
+                code = "VECTOR_PUBLICATION_PENDING" if publish_attempted else getattr(error, "code", None)
+                await self.repository.mark_failed(stable_id, code)
+                if publish_attempted:
+                    raise GatewayVectorStoreError(
+                        "VECTOR_PUBLICATION_PENDING", getattr(error, "status_code", None),
+                        gateway_trace_id=getattr(error, "gateway_trace_id", None),
+                    ) from error
+                raise
+            cleanup_pending = False
+            try:
+                if progress:
                     await progress("deleting_old", written, len(records))
-                stale_ids = [vector_id for vector_id in old_ids if vector_id not in set(target_ids)]
+                stale_ids = [value for value in old_groups["children"] if value not in set(target_ids)]
+                stale_parents = [value for value in old_groups["parents"] if value not in parents]
                 if stale_ids:
                     await self.vector_store.delete_vectors(stale_ids)
-                await self.repository.finish_sync(stable_id, target_ids, target_fingerprint)
-            except Exception as error:
-                # Keep IDs belonging to the previous local generation. Gateway may
-                # have partially upserted this generation before returning an error.
-                previous_ids = set(old_ids)
-                cleanup_ids = [vector_id for vector_id in target_ids if vector_id not in previous_ids]
-                uncertain_write = isinstance(error, GatewayVectorStoreError) and (
-                    error.code in {"VECTOR_GATEWAY_TIMEOUT", "VECTOR_GATEWAY_NETWORK_ERROR"}
-                    or error.status_code in {502, 503, 504}
-                )
-                if not uncertain_write:
-                    try:
-                        await self.vector_store.delete_vectors(cleanup_ids)
-                    except Exception:
-                        # The next retry can safely upsert these deterministic IDs.
-                        pass
-                await self.repository.mark_failed(
-                    stable_id,
-                    error.code if isinstance(error, GatewayVectorStoreError) else None,
-                )
-                raise
+                if stale_parents:
+                    await self.vector_store.delete_vectors(stale_parents)
+                await self.repository.remove_inactive_records(stable_id, target_fingerprint)
+            except Exception:
+                cleanup_pending = True
+                await self.repository.mark_cleanup_pending(stable_id)
+                if progress:
+                    await progress("cleanup_pending", written, len(records))
             results.append({"id": stable_id, "result": {
                 "vectors": written, "chunks": len(target_ids),
                 "action": "updated" if existing else "created",
+                "cleanup_pending": cleanup_pending, "parents": len(parents),
             }})
         return results
 
@@ -546,7 +587,13 @@ class KnowledgeBaseService:
             current_target = self._target_fingerprint(await self.status())
             if active.get("embedded_target_fingerprint") != current_target:
                 raise GatewayVectorStoreError("VECTOR_DOCUMENT_TARGET_MISMATCH")
-        owned_ids = await self.repository.get_chunk_ids(document_id, owner_user_id)
+        detail = await self.repository.get_document_detail(document_id, owner_user_id)
+        if detail and detail.get("sync_error_code") == "VECTOR_PUBLICATION_PENDING":
+            raise GatewayVectorStoreError("VECTOR_PUBLICATION_PENDING")
+        groups = await self.repository.get_record_groups(
+            document_id, owner_user_id, self._target_fingerprint(await self.status()),
+        )
+        owned_ids = groups["children"]
         if not owned_ids and not await self.repository.document_exists(document_id):
             return {"deleted": 0}
         if not owned_ids:
@@ -558,6 +605,8 @@ class KnowledgeBaseService:
             await self.repository.delete_local_document(document_id, owner_user_id)
             return {"deleted": 0}
         result = await self.vector_store.delete(owned_ids)
+        if groups["parents"]:
+            await self.vector_store.delete(groups["parents"])
         await self.repository.delete_local_document(document_id, owner_user_id)
         return result
 
@@ -713,6 +762,8 @@ class KnowledgeBaseService:
                 item_metadata = item.get("metadata")
                 if not isinstance(item_metadata, dict):
                     return False
+                if item_metadata.get("vector_storage_version") == 2:
+                    return True
                 vector_id = item_metadata.get("vector_record_id")
                 if vector_id is not None:
                     return isinstance(vector_id, str) and vector_id in active_ids
@@ -729,16 +780,27 @@ class KnowledgeBaseService:
 
             results = [item for item in results if is_active_result(item)][:top_k]
         normalized: list[dict[str, Any]] = []
-        parent_ids = [
-            str(item.get("metadata", {}).get("parent_id"))
+        parent_ids = list(dict.fromkeys(
+            str(item.get("parent_id") or item.get("metadata", {}).get("parent_id"))
             for item in results
-            if isinstance(item.get("metadata"), dict) and item["metadata"].get("parent_id")
-        ]
-        parent_contexts = await self.repository.get_parent_contexts(owner_user_id, parent_ids)
+            if item.get("parent_id") or (isinstance(item.get("metadata"), dict) and item["metadata"].get("parent_id"))
+        ))
+        parent_contexts = {}
+        if parent_ids:
+            try:
+                fetched = await self.vector_store.fetch_records(parent_ids)
+                for parent in fetched["records"]:
+                    metadata = parent.get("metadata", {})
+                    if (parent.get("record_kind") == "document" and isinstance(metadata, dict)
+                            and metadata.get("owner_user_id") == owner_user_id
+                            and metadata.get("record_type") == "knowledge_parent"):
+                        parent_contexts[(str(metadata.get("document_id", "")), parent["id"])] = parent["content"]
+            except GatewayVectorStoreError:
+                logger.warning("parent_context_fetch_failed")
         for item in results:
             item_metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
             document_id = str(item_metadata.get("document_id", item.get("document_id", item.get("external_id", ""))))
-            parent_id = str(item_metadata.get("parent_id", "")) or None
+            parent_id = str(item.get("parent_id") or item_metadata.get("parent_id", "")) or None
             content = str(item.get("content", item.get("text", "")))
             normalized.append(
                 {
@@ -748,6 +810,7 @@ class KnowledgeBaseService:
                     "content": content,
                     "context_content": parent_contexts.get((document_id, parent_id), content) if parent_id else content,
                     "parent_id": parent_id,
+                    "context_status": "available" if not parent_id or (document_id, parent_id) in parent_contexts else "missing",
                     "score": item.get("score", item.get("similarity")),
                     "metadata": item_metadata,
                 }
